@@ -81,7 +81,7 @@ def _filter(df: pd.DataFrame) -> pd.DataFrame:
     if item:
         df = df[df["ItemCode"] == item]
     if sub:
-        df = df[df["SubAreaCode"] == sub]
+        df = df[df["ForecastSubAreaCode"] == sub]
     if country:
         df = df[df["Country"] == country]
     if snap:
@@ -127,7 +127,7 @@ def page_anomalies():
 def page_forecast():
     items = RANKINGS["ItemCode"].head(50).tolist()
     return render_template("forecast.html", items=items, kpis=KPIS,
-                           subareas=sorted(DF["SubAreaCode"].unique().tolist()))
+                           subareas=sorted(DF["ForecastSubAreaCode"].unique().tolist()))
 
 
 @app.route("/rankings")
@@ -151,11 +151,11 @@ def page_item(code):
 def api_overview():
     sub = _filter(DF)
     # Time-series of inconsistency rate by month
-    by_month = (sub.assign(m=sub["SalesDate"].dt.to_period("M").astype(str))
+    by_month = (sub.assign(m=sub["salesDate"].dt.to_period("M").astype(str))
                   .groupby("m")
                   .agg(rows=("ItemCode", "size"),
-                       inc=("IsInconsistentGrossSales", "sum"),
-                       rev=("RevisionFlag", "sum"),
+                       inc=("is_inconsistent_grosssales", "sum"),
+                       rev=("revision_flag", "sum"),
                        ci=("ci_flag", "sum"),
                        iso=("if_flag", "sum"),
                        lr=("lr_flag", "sum"))
@@ -167,7 +167,7 @@ def api_overview():
     by_month["lr_pct"] = (100 * by_month["lr"] / by_month["rows"]).round(2)
 
     # Distribution of revisions (non-null)
-    rev = sub["ForecastRevisions"].dropna()
+    rev = sub["forecast_revisions"].dropna()
     bins = np.linspace(rev.quantile(0.01), rev.quantile(0.99), 30) if len(rev) else []
     if len(bins):
         hist, edges = np.histogram(rev.clip(bins[0], bins[-1]), bins=bins)
@@ -188,8 +188,8 @@ def api_overview():
     # Country-level inconsistency rate
     by_country = (sub.groupby("Country")
                    .agg(rows=("ItemCode", "size"),
-                        inc=("IsInconsistentGrossSales", "sum"),
-                        rev=("RevisionFlag", "sum"))
+                        inc=("is_inconsistent_grosssales", "sum"),
+                        rev=("revision_flag", "sum"))
                    .assign(inc_pct=lambda d: (100 * d["inc"] / d["rows"]).round(2),
                            rev_pct=lambda d: (100 * d["rev"] / d["rows"]).round(2))
                    .reset_index()
@@ -210,7 +210,7 @@ def api_anomaly_scatter():
     """Return points for normal vs anomaly scatter for a chosen model."""
     model = request.args.get("model", "if")
     sub = _filter(DF)
-    sub = sub[sub["DifferenceGrossSales"] != 0]
+    sub = sub[sub["diff_grosssales"] != 0]
     flag_col = {"ci": "ci_flag", "if": "if_flag", "lr": "lr_flag"}.get(model, "if_flag")
 
     norm = sub[sub[flag_col] == 0]
@@ -220,16 +220,16 @@ def api_anomaly_scatter():
 
     payload = {
         "normal": {
-            "x": norm["DifferenceGrossSales"].astype(float).tolist(),
-            "y": norm["GrossSalesQuantitySwitched"].astype(float).tolist(),
+            "x": norm["diff_grosssales"].astype(float).tolist(),
+            "y": norm["GrossSalesQuantity_Switched"].astype(float).tolist(),
             "item": norm["ItemCode"].tolist(),
-            "date": norm["SalesDate"].dt.strftime("%Y-%m-%d").tolist(),
+            "date": norm["salesDate"].dt.strftime("%Y-%m-%d").tolist(),
         },
         "anomaly": {
-            "x": anom["DifferenceGrossSales"].astype(float).tolist(),
-            "y": anom["GrossSalesQuantitySwitched"].astype(float).tolist(),
+            "x": anom["diff_grosssales"].astype(float).tolist(),
+            "y": anom["GrossSalesQuantity_Switched"].astype(float).tolist(),
             "item": anom["ItemCode"].tolist(),
-            "date": anom["SalesDate"].dt.strftime("%Y-%m-%d").tolist(),
+            "date": anom["salesDate"].dt.strftime("%Y-%m-%d").tolist(),
         },
         "ci_bounds": [PIPE["ci_metrics"]["lower_bound"],
                       PIPE["ci_metrics"]["upper_bound"]],
@@ -245,31 +245,31 @@ def api_forecast_actual():
     sub = request.args.get("subarea", "")
     sel = DF[(DF["ItemCode"] == item)]
     if sub:
-        sel = sel[sel["SubAreaCode"] == sub]
+        sel = sel[sel["ForecastSubAreaCode"] == sub]
     if not len(sel):
         return jsonify({"error": "no data"})
 
     # Actual sales aggregated by date
-    actual = (sel.groupby("SalesDate")
-                 .agg(actual=("GrossSalesQuantitySwitched", "sum"))
-                 .reset_index().sort_values("SalesDate"))
+    actual = (sel.groupby("salesDate")
+                 .agg(actual=("GrossSalesQuantity_Switched", "sum"))
+                 .reset_index().sort_values("salesDate"))
 
     # Forecast aggregated by ForecastMonth (mid-month)
-    fc = (sel.dropna(subset=["ForecastSalesInQuantity"])
+    fc = (sel.dropna(subset=["ForecastSellInQuantity"])
             .groupby("ForecastMonth")
-            .agg(forecast=("ForecastSalesInQuantity", "mean"))
+            .agg(forecast=("ForecastSellInQuantity", "mean"))
             .reset_index())
     fc["ForecastMonth_dt"] = pd.to_datetime(fc["ForecastMonth"] + "-15",
                                             errors="coerce")
     fc = fc.dropna(subset=["ForecastMonth_dt"]).sort_values("ForecastMonth_dt")
 
     # Confidence band on forecast: ±1 SD of revisions
-    sd = sel["ForecastRevisions"].dropna().std() or 0
+    sd = sel["forecast_revisions"].dropna().std() or 0
     fc["upper"] = fc["forecast"] + sd
     fc["lower"] = fc["forecast"] - sd
 
     return jsonify(_to_jsonable({
-        "actual_x": actual["SalesDate"].dt.strftime("%Y-%m-%d").tolist(),
+        "actual_x": actual["salesDate"].dt.strftime("%Y-%m-%d").tolist(),
         "actual_y": actual["actual"].astype(float).tolist(),
         "fc_x": fc["ForecastMonth_dt"].dt.strftime("%Y-%m-%d").tolist(),
         "fc_y": fc["forecast"].astype(float).tolist(),
@@ -286,7 +286,7 @@ def api_snapshot_overlap():
     sub = request.args.get("subarea", "")
     sel = DF[DF["ItemCode"] == item]
     if sub:
-        sel = sel[sel["SubAreaCode"] == sub]
+        sel = sel[sel["ForecastSubAreaCode"] == sub]
     if not len(sel):
         return jsonify({"error": "no data"})
 
@@ -298,9 +298,9 @@ def api_snapshot_overlap():
     series = []
     for s in (s1, s2):
         sub_s = (sel[sel["SnapshotMonth"] == s]
-                 .dropna(subset=["ForecastSalesInQuantity"])
+                 .dropna(subset=["ForecastSellInQuantity"])
                  .groupby("ForecastMonth")
-                 .agg(qty=("ForecastSalesInQuantity", "mean"))
+                 .agg(qty=("ForecastSellInQuantity", "mean"))
                  .reset_index())
         sub_s["dt"] = pd.to_datetime(sub_s["ForecastMonth"] + "-15", errors="coerce")
         sub_s = sub_s.dropna(subset=["dt"]).sort_values("dt")
@@ -333,21 +333,21 @@ def api_item(code):
     sel = DF[DF["ItemCode"] == code]
     if not len(sel):
         return jsonify({"error": "not found"})
-    sub = (sel.groupby("SalesDate")
-              .agg(actual=("GrossSalesQuantitySwitched", "sum"),
-                   so=("SalesOutQuantitySwitched", "sum"),
-                   diff_gross=("DifferenceGrossSales", "sum"),
-                   inc=("IsInconsistentGrossSales", "max"),
+    sub = (sel.groupby("salesDate")
+              .agg(actual=("GrossSalesQuantity_Switched", "sum"),
+                   so=("SalesOutQuantity_Switched", "sum"),
+                   diff_gross=("diff_grosssales", "sum"),
+                   inc=("is_inconsistent_grosssales", "max"),
                    ci=("ci_flag", "max"),
                    ifl=("if_flag", "max"),
                    lr=("lr_flag", "max"),
                    if_score=("if_score", "max"),
                    lr_proba=("lr_proba", "max"))
               .reset_index().sort_values("SalesDate"))
-    fc = (sel.dropna(subset=["ForecastSalesInQuantity"])
+    fc = (sel.dropna(subset=["ForecastSellInQuantity"])
             .groupby("ForecastMonth")
-            .agg(forecast=("ForecastSalesInQuantity", "mean"),
-                 revisions=("ForecastRevisions",
+            .agg(forecast=("ForecastSellInQuantity", "mean"),
+                 revisions=("forecast_revisions",
                             lambda s: float(np.nanmean(np.abs(s)) or 0)))
             .reset_index())
     fc["dt"] = pd.to_datetime(fc["ForecastMonth"] + "-15", errors="coerce")
@@ -358,9 +358,9 @@ def api_item(code):
     snaps_payload = []
     for s in sorted(sel["SnapshotMonth"].unique().tolist()):
         ss = (sel[sel["SnapshotMonth"] == s]
-              .dropna(subset=["ForecastSalesInQuantity"])
+              .dropna(subset=["ForecastSellInQuantity"])
               .groupby("ForecastMonth")
-              .agg(qty=("ForecastSalesInQuantity", "mean")).reset_index())
+              .agg(qty=("ForecastSellInQuantity", "mean")).reset_index())
         ss["dt"] = pd.to_datetime(ss["ForecastMonth"] + "-15", errors="coerce")
         ss = ss.dropna(subset=["dt"]).sort_values("dt")
         snaps_payload.append({
@@ -371,7 +371,7 @@ def api_item(code):
 
     return jsonify(_to_jsonable({
         "item": code,
-        "actual_x": sub["SalesDate"].dt.strftime("%Y-%m-%d").tolist(),
+        "actual_x": sub["salesDate"].dt.strftime("%Y-%m-%d").tolist(),
         "actual_y": sub["actual"].astype(float).tolist(),
         "so_y": sub["so"].astype(float).tolist(),
         "diff_y": sub["diff_gross"].astype(float).tolist(),

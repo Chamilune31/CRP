@@ -38,11 +38,10 @@ CACHE_FILE = CACHE_DIR / "processed.pkl"
 # --------------------------------------------------------------------------- #
 def load_dataset() -> pd.DataFrame:
     df = pd.read_csv(DATA_PATH)
-    df["SalesDate"] = pd.to_datetime(df["SalesDate"], errors="coerce")
-    df["ExecutionDate"] = pd.to_datetime(df["ExecutionDate"], errors="coerce")
+    df["salesDate"] = pd.to_datetime(df["salesDate"], errors="coerce")
     df["SnapshotMonth"] = df["SnapshotMonth"].astype(str)
     df["ForecastMonth"] = df["ForecastMonth"].astype(str)
-    df["Country"] = df["SubAreaCode"].str[-2:]
+    df["Country"] = df["ForecastSubAreaCode"].str[-2:]
     return df
 
 
@@ -54,8 +53,8 @@ def confidence_interval_anomalies(df: pd.DataFrame, level: float = 0.44):
     from the population of non-zero differences. Returns
     (flag_array, metrics_dict).
     """
-    sample = df.loc[df["DifferenceGrossSales"] != 0,
-                    "DifferenceGrossSales"].astype(float)
+    sample = df.loc[df["diff_grosssales"] != 0,
+                    "diff_grosssales"].astype(float)
     n = len(sample)
     mean = float(sample.mean()) if n else 0.0
     sd = float(sample.std(ddof=1)) if n > 1 else 0.0
@@ -64,10 +63,10 @@ def confidence_interval_anomalies(df: pd.DataFrame, level: float = 0.44):
     upper = mean + z * sd
 
     flags = np.zeros(len(df), dtype=int)
-    diff = df["DifferenceGrossSales"].astype(float).values
+    diff = df["diff_grosssales"].astype(float).values
     flags[(diff != 0) & ((diff < lower) | (diff > upper))] = 1
 
-    actual = df["IsInconsistentGrossSales"].astype(int).values
+    actual = df["is_inconsistent_grosssales"].astype(int).values
     metrics = _classification_metrics(actual, flags)
     metrics.update({"lower_bound": float(lower), "upper_bound": float(upper),
                     "level": float(level), "sample_n": int(n),
@@ -80,11 +79,11 @@ def confidence_interval_anomalies(df: pd.DataFrame, level: float = 0.44):
 # --------------------------------------------------------------------------- #
 def isolation_forest_anomalies(df: pd.DataFrame, contamination: float = 0.05,
                                random_state: int = 42):
-    feats = df[["DifferenceGrossSales", "GrossSalesQuantitySwitched",
-                "DifferenceSalesOut", "SalesOutQuantitySwitched"
+    feats = df[["diff_grosssales", "GrossSalesQuantity_Switched",
+                "diff_sellout", "SalesOutQuantity_Switched"
                 ]].astype(float).fillna(0).values
 
-    mask_inconsistent = df["DifferenceGrossSales"].values != 0
+    mask_inconsistent = df["diff_grosssales"].values != 0
     flags = np.zeros(len(df), dtype=int)
     scores = np.zeros(len(df), dtype=float)
 
@@ -99,7 +98,7 @@ def isolation_forest_anomalies(df: pd.DataFrame, contamination: float = 0.05,
         flags[mask_inconsistent] = sub_flags
         scores[mask_inconsistent] = sub_scores
 
-    actual = df["IsInconsistentGrossSales"].astype(int).values
+    actual = df["is_inconsistent_grosssales"].astype(int).values
     metrics = _classification_metrics(actual, flags)
     metrics.update({"contamination": float(contamination),
                     "n_scored": int(mask_inconsistent.sum())})
@@ -118,13 +117,13 @@ def build_engineered_features(df: pd.DataFrame) -> pd.DataFrame:
     synthetic 500 K-row sample.
     """
     out = df.copy()
-    for col in ["DifferenceGrossSales", "DifferenceSalesOut"]:
+    for col in ["diff_grosssales", "diff_sellout"]:
         out[f"{col}_abs"] = out[col].abs().astype(float)
         out[f"{col}_log"] = (np.sign(out[col])
                              * np.log1p(out[col].abs())).astype(float)
     out["gross_to_so_ratio"] = (
-        out["GrossSalesQuantitySwitched"]
-        / out["SalesOutQuantitySwitched"].replace(0, np.nan))
+        out["GrossSalesQuantity_Switched"]
+        / out["SalesOutQuantity_Switched"].replace(0, np.nan))
     out = out.fillna(0)
     return out
 
@@ -134,14 +133,14 @@ def logistic_regression_model(df: pd.DataFrame, sample_n: int = 150_000):
     feature_cols = [c for c in feats_df.columns
                     if c.endswith(("_abs", "_log"))]
     feature_cols += ["gross_to_so_ratio",
-                     "DifferenceGrossSales", "DifferenceSalesOut",
-                     "GrossSalesQuantitySwitched",
-                     "SalesOutQuantitySwitched"]
+                     "diff_grosssales", "diff_sellout",
+                     "GrossSalesQuantity_Switched",
+                     "SalesOutQuantity_Switched"]
 
     X = feats_df[feature_cols].astype(float).values
-    y = feats_df["IsInconsistentGrossSales"].astype(int).values
+    y = feats_df["is_inconsistent_grosssales"].astype(int).values
 
-    sort_idx = feats_df["SalesDate"].argsort().values
+    sort_idx = feats_df["salesDate"].argsort().values
     split = int(0.8 * len(sort_idx))
     train_idx = sort_idx[:split]
     test_idx = sort_idx[split:]
@@ -204,18 +203,18 @@ def build_rankings(df: pd.DataFrame, ci_flags, if_flags, lr_flags,
     work["if_score"] = if_scores
     work["lr_proba"] = lr_proba
 
-    work["abs_revision"] = work["ForecastRevisions"].abs()
-    work["abs_diff_gross"] = work["DifferenceGrossSales"].abs()
+    work["abs_revision"] = work["forecast_revisions"].abs()
+    work["abs_diff_gross"] = work["diff_grosssales"].abs()
     grp = work.groupby("ItemCode", sort=False)
     rk = grp.agg(
         rows=("ItemCode", "size"),
         n_ci=("ci_flag", "sum"),
         n_if=("if_flag", "sum"),
         n_lr=("lr_flag", "sum"),
-        n_inconsistent=("IsInconsistentGrossSales", "sum"),
-        n_revised=("RevisionFlag", "sum"),
+        n_inconsistent=("is_inconsistent_grosssales", "sum"),
+        n_revised=("revision_flag", "sum"),
         avg_abs_revision=("abs_revision", "mean"),
-        avg_revision_ratio=("RevisionRatioAbsolute", "mean"),
+        avg_revision_ratio=("revision_ratio_absolute", "mean"),
         max_diff_gross=("abs_diff_gross", "max"),
         avg_if_score=("if_score", "mean"),
         avg_lr_proba=("lr_proba", "mean"),
@@ -245,30 +244,30 @@ def build_rankings(df: pd.DataFrame, ci_flags, if_flags, lr_flags,
 # --------------------------------------------------------------------------- #
 def compute_kpis(df: pd.DataFrame, ci_flags, if_flags, lr_flags) -> dict:
     n = len(df)
-    revised_items = df.loc[df["RevisionFlag"] == 1, "ItemCode"].nunique()
+    revised_items = df.loc[df["revision_flag"] == 1, "ItemCode"].nunique()
     total_items = df["ItemCode"].nunique()
-    inc = df["IsInconsistentGrossSales"] == 1
-    ok = df["IsInconsistentGrossSales"] == 0
+    inc = df["is_inconsistent_grosssales"] == 1
+    ok = df["is_inconsistent_grosssales"] == 0
 
     kpis = {
         "rows": int(n),
         "items": int(total_items),
-        "subareas": int(df["SubAreaCode"].nunique()),
+        "subareas": int(df["ForecastSubAreaCode"].nunique()),
         "snapshots": int(df["SnapshotMonth"].nunique()),
-        "date_min": str(df["SalesDate"].min().date()),
-        "date_max": str(df["SalesDate"].max().date()),
-        "pct_revised_rows": round(100.0 * (df["RevisionFlag"] == 1).mean(), 2),
+        "date_min": str(df["salesDate"].min().date()),
+        "date_max": str(df["salesDate"].max().date()),
+        "pct_revised_rows": round(100.0 * (df["revision_flag"] == 1).mean(), 2),
         "pct_revised_items": round(100.0 * revised_items / max(total_items, 1), 2),
         "pct_inconsistent_gross": round(100.0 * inc.mean(), 2),
-        "pct_inconsistent_so": round(100.0 * (df["IsInconsistentSalesOut"] == 1).mean(), 2),
+        "pct_inconsistent_so": round(100.0 * (df["is_inconsistent_salesout"] == 1).mean(), 2),
         "pct_anomaly_ci": round(100.0 * float(np.mean(ci_flags)), 2),
         "pct_anomaly_if": round(100.0 * float(np.mean(if_flags)), 2),
         "pct_anomaly_lr": round(100.0 * float(np.mean(lr_flags)), 2),
         "avg_abs_revision_inconsistent": (
-            round(float(np.nanmean(np.abs(df.loc[inc, "ForecastRevisions"]))), 2)
+            round(float(np.nanmean(np.abs(df.loc[inc, "forecast_revisions"]))), 2)
             if inc.any() else 0.0),
         "avg_abs_revision_consistent": (
-            round(float(np.nanmean(np.abs(df.loc[ok, "ForecastRevisions"]))), 2)
+            round(float(np.nanmean(np.abs(df.loc[ok, "forecast_revisions"]))), 2)
             if ok.any() else 0.0),
     }
     return kpis
