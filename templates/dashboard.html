@@ -1,0 +1,279 @@
+﻿{% extends "base.html" %}
+{% set active = 'overview' %}
+
+{% block content %}
+<h1 class="h3 mb-3">Forecast Health Overview</h1>
+<p class="text-secondary mb-3">
+  A single page to check whether the forecasts can be validated, or
+  whether some items / months need a manual review first.
+</p>
+
+<div class="guide-card">
+  <h2>How to read this dashboard - a 5-step walkthrough</h2>
+  <div class="guide-step">
+    <span class="step-badge s1">1</span>
+    <div class="guide-text">
+      <b>Start with the colored tiles below.</b> They give you the headline
+      numbers in one glance: how many items were revised, how many rows
+      look inconsistent, and how many were flagged by each detector.
+      If the warning-coloured tiles look high, something needs review.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s2">2</span>
+    <div class="guide-text">
+      <b>Check the monthly trend chart.</b> It shows when the problems
+      happened. Spikes on the orange or red lines tell you which months
+      to investigate first.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s3">3</span>
+    <div class="guide-text">
+      <b>Look at the country bar chart.</b> Countries on the left have the
+      most inconsistencies - focus your audit there before everywhere else.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s4">4</span>
+    <div class="guide-text">
+      <b>Scan the two Top-10 tables.</b> "Most-revised items" tells you
+      which products had the biggest forecast changes. "Suspicious items"
+      blends all three detectors into one ranking.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s5">5</span>
+    <div class="guide-text">
+      <b>Click "Inspect" on a suspicious item</b> to open its detail page,
+      with the full time-series, anomaly markers, and snapshot overlay.
+      That's where you decide: validate the forecast, or push it back?
+    </div>
+  </div>
+</div>
+
+<div class="alert-banner warn">
+  <b>Today's headline:</b>
+  {{ kpis.pct_revised_items }}% of items had at least one forecast revision.
+  When the data was inconsistent, the average size of a revision was
+  <b>{{ kpis.avg_abs_revision_inconsistent }}</b>, vs only
+  <b>{{ kpis.avg_abs_revision_consistent }}</b> when consistent -
+  so inconsistent input directly translates into bigger forecast changes.
+</div>
+
+<h4 class="mt-4 mb-2"><span class="step-badge s1">1</span>Quick health check</h4>
+<div class="simple-words">
+  <span class="label">In plain words</span>
+  Each tile is a single number summarising the whole dataset. Higher
+  numbers in the orange/red tiles mean more potential problems to review.
+</div>
+<div class="row g-3 mb-4">
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card">
+    <div class="kpi-label">% Revised rows</div>
+    <div class="kpi-value">{{ kpis.pct_revised_rows }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">share of rows where the forecast changed between snapshots</div>
+  </div></div>
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card">
+    <div class="kpi-label">% Revised items</div>
+    <div class="kpi-value">{{ kpis.pct_revised_items }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">share of unique products that had at least one revision</div>
+  </div></div>
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card kpi-warn">
+    <div class="kpi-label">% Inconsistent (Gross)</div>
+    <div class="kpi-value">{{ kpis.pct_inconsistent_gross }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">rows where actual sales changed between two snapshots</div>
+  </div></div>
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card kpi-warn">
+    <div class="kpi-label">% Anomaly · CI</div>
+    <div class="kpi-value">{{ kpis.pct_anomaly_ci }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">rows flagged by the simple statistical test</div>
+  </div></div>
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card kpi-danger">
+    <div class="kpi-label">% Anomaly · Iso. Forest</div>
+    <div class="kpi-value">{{ kpis.pct_anomaly_if }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">rows flagged by the unsupervised AI model</div>
+  </div></div>
+  <div class="col-6 col-md-3 col-xl-2"><div class="kpi-card kpi-danger">
+    <div class="kpi-label">% Anomaly · Logistic Reg.</div>
+    <div class="kpi-value">{{ kpis.pct_anomaly_lr }}<span class="kpi-suffix"> %</span></div>
+    <div class="small text-secondary">rows flagged by the supervised classifier</div>
+  </div></div>
+</div>
+
+<div class="section-card">
+  <h2>Filters (optional)</h2>
+  <div class="simple-words">
+    <span class="label">In plain words</span>
+    Want to look at a single country or month? Pick it here and click
+    "Apply". The trend chart, histogram and country chart will update
+    immediately.
+  </div>
+  <div class="controls-row">
+    <div>
+      <label>Country</label>
+      <select id="f-country" class="form-select form-select-sm">
+        <option value="">All countries</option>
+        {% for c in countries %}<option>{{c}}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Snapshot month</label>
+      <select id="f-snapshot" class="form-select form-select-sm">
+        <option value="">All months</option>
+        {% for s in snapshots %}<option>{{s}}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-sm btn-primary" id="apply-filters">Apply filters</button>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-7"><div class="section-card">
+    <h2><span class="step-badge s2">2</span>Monthly trend - when did problems happen?</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      One dot per month. The orange line is the % of rows that had
+      inconsistent actual sales. The blue line is the % of rows whose
+      forecast was revised. The dotted lines are the three detectors.
+      <br><b>Look for:</b> any sudden jump or sustained high level - those
+      are the months that need a closer look.
+    </div>
+    <div id="plot-trend" class="plot-box"></div>
+  </div></div>
+  <div class="col-12 col-xl-5"><div class="section-card">
+    <h2><span class="step-badge s2">2</span>How big are the revisions?</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      Each bar shows how many rows had a revision of that size. Most bars
+      are near zero (small changes are normal). Tall bars far from zero
+      mean a lot of forecasts were moved by a large amount - investigate
+      those.
+    </div>
+    <div id="plot-revhist" class="plot-box"></div>
+  </div></div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-6"><div class="section-card">
+    <h2><span class="step-badge s3">3</span>Which countries are noisiest?</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      Each pair of bars is one country. Orange = % rows with inconsistent
+      actuals. Blue = % rows where the forecast was revised. Sort
+      countries left-to-right by orange height to see where to start.
+    </div>
+    <div id="plot-country" class="plot-box"></div>
+  </div></div>
+  <div class="col-12 col-xl-6"><div class="section-card">
+    <h2><span class="step-badge s4">4</span>Top-10 most-revised items</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      The 10 products whose forecasts moved the most between snapshots,
+      on average. Click the item code to open its detail page.
+    </div>
+    <table class="table table-sm dt-rankings" id="tbl-top-rev">
+      <thead><tr><th>Item</th><th class="text-end">Avg |Revision|</th>
+                 <th class="text-end">Revised rows</th>
+                 <th class="text-end">Total rows</th></tr></thead>
+      <tbody></tbody>
+    </table>
+  </div></div>
+</div>
+
+<div class="section-card">
+  <h2><span class="step-badge s4">4</span>Top-10 suspicious items (composite score)</h2>
+  <div class="simple-words">
+    <span class="label">In plain words</span>
+    Items at the top are flagged by several detectors at once <i>and</i>
+    have large forecast revisions. The "Suspicion" column is a 0-100%
+    score blending all signals. Click <b>Inspect</b> to see the full
+    diagnostic for any item.
+  </div>
+  <table class="table table-sm dt-rankings" id="tbl-top-sus">
+    <thead><tr><th>Item</th><th class="text-end">Suspicion</th>
+               <th class="text-end">% IF</th><th class="text-end">% CI</th>
+               <th class="text-end">% LR</th><th></th></tr></thead>
+    <tbody></tbody>
+  </table>
+</div>
+
+<div class="section-card" style="border-left: 4px solid var(--danger);">
+  <h2><span class="step-badge s5">5</span>What to do next</h2>
+  <div class="simple-words">
+    <span class="label">Action</span>
+    Click any row above (or open <a href="/rankings">Suspicious Items</a>
+    for the full sortable list) to land on the per-item page. There you
+    can see the actual sales vs the forecast, anomaly markers on each
+    date, and how the forecast moved between snapshots - the evidence
+    you need to either validate or push back.
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function refresh() {
+  const params = new URLSearchParams();
+  const c = document.getElementById('f-country').value;
+  const s = document.getElementById('f-snapshot').value;
+  if (c) params.set('country', c);
+  if (s) params.set('snapshot', s);
+  const data = await CRP.fetchJSON('/api/overview?' + params);
+
+  const m = data.by_month;
+  CRP.plot('plot-trend', [
+    {x: m.m, y: m.inc_pct, type: 'scatter', mode: 'lines+markers',
+     name: '% Inconsistent', line: {color: '#c2410c', width: 2}},
+    {x: m.m, y: m.rev_pct, type: 'scatter', mode: 'lines+markers',
+     name: '% Revised', line: {color: '#2c5282', width: 2}},
+    {x: m.m, y: m.if_pct, type: 'scatter', mode: 'lines',
+     name: '% Iso-Forest flag', line: {color: '#b91c1c', dash: 'dot'}},
+    {x: m.m, y: m.ci_pct, type: 'scatter', mode: 'lines',
+     name: '% CI flag', line: {color: '#7c3aed', dash: 'dot'}},
+    {x: m.m, y: m.lr_pct, type: 'scatter', mode: 'lines',
+     name: '% Logistic-Reg flag', line: {color: '#047857', dash: 'dot'}},
+  ], {yaxis: {title: 'percent of rows', ticksuffix: '%'}});
+
+  const h = data.rev_hist;
+  if (h.counts && h.counts.length) {
+    const centres = [];
+    for (let i = 0; i < h.counts.length; i++) centres.push((h.edges[i] + h.edges[i+1]) / 2);
+    CRP.plot('plot-revhist', [{
+      x: centres, y: h.counts, type: 'bar',
+      marker: {color: '#2c5282'}, name: 'rows'
+    }], {xaxis: {title: 'Forecast revision (units)'},
+         yaxis: {title: 'number of rows'}});
+  }
+
+  const c2 = data.by_country;
+  CRP.plot('plot-country', [{
+    x: c2.Country, y: c2.inc_pct, type: 'bar', name: '% Inconsistent',
+    marker: {color: '#c2410c'}
+  }, {
+    x: c2.Country, y: c2.rev_pct, type: 'bar', name: '% Revised',
+    marker: {color: '#2c5282'}
+  }], {barmode: 'group', yaxis: {title: '% of rows', ticksuffix: '%'}});
+
+  const tr = document.querySelector('#tbl-top-rev tbody');
+  tr.innerHTML = data.top_rev.map(r =>
+    `<tr><td><a class="dt-link" href="/item/${r.ItemCode}">${r.ItemCode}</a></td>
+         <td class="text-end">${CRP.fmt(r.avg_abs_revision, 0)}</td>
+         <td class="text-end">${r.n_revised}</td>
+         <td class="text-end">${r.rows}</td></tr>`).join('');
+
+  const ts = document.querySelector('#tbl-top-sus tbody');
+  ts.innerHTML = data.top_sus.map(r =>
+    `<tr><td><a class="dt-link" href="/item/${r.ItemCode}">${r.ItemCode}</a></td>
+         <td class="text-end">${(r.suspicion_score * 100).toFixed(1)}%</td>
+         <td class="text-end">${CRP.pct(r.pct_anomaly_if * 100, 1)}</td>
+         <td class="text-end">${CRP.pct(r.pct_anomaly_ci * 100, 1)}</td>
+         <td class="text-end">${CRP.pct(r.pct_anomaly_lr * 100, 1)}</td>
+         <td><a class="btn btn-sm btn-outline-primary" href="/item/${r.ItemCode}">Inspect</a></td></tr>`)
+    .join('');
+}
+
+document.getElementById('apply-filters').addEventListener('click', refresh);
+refresh();
+</script>
+{% endblock %}

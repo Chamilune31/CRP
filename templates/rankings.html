@@ -1,0 +1,152 @@
+﻿{% extends "base.html" %}
+{% set active = 'rankings' %}
+
+{% block content %}
+<h1 class="h3 mb-3">Suspicious Items - full ranking</h1>
+<p class="text-secondary mb-3">
+  The complete list of items, ordered by how suspicious they look. Use
+  this page to triage your manual review work.
+</p>
+
+<div class="guide-card">
+  <h2>How to use this page</h2>
+  <div class="guide-step">
+    <span class="step-badge s1">1</span>
+    <div class="guide-text">
+      <b>Use the "Sort by" dropdown</b> to choose how the table is
+      ordered. Default is the composite suspicion score, but you can
+      sort by any single signal (% Iso-Forest, % Revised, etc.).
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s2">2</span>
+    <div class="guide-text">
+      <b>Set "Min rows" to 3 or more</b> if you want to ignore items
+      that only have a couple of observations (their percentages are
+      noisy with so little data).
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s3">3</span>
+    <div class="guide-text">
+      <b>Search for a specific item code</b> using the search box -
+      handy when a planner reports a problem on a particular product.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s4">4</span>
+    <div class="guide-text">
+      <b>Click "Inspect"</b> on any row to open the per-item diagnostic
+      page (full time-series, anomaly markers, snapshot overlay).
+    </div>
+  </div>
+</div>
+
+<div class="section-card">
+  <h2>Filters</h2>
+  <div class="controls-row">
+    <div>
+      <label>Sort by</label>
+      <select id="f-sort" class="form-select form-select-sm">
+        <option value="suspicion_score">Suspicion score (default)</option>
+        <option value="pct_anomaly_if">% Iso-Forest anomalies</option>
+        <option value="pct_anomaly_ci">% CI anomalies</option>
+        <option value="pct_anomaly_lr">% Logistic-Reg anomalies</option>
+        <option value="avg_abs_revision">Avg revision size</option>
+        <option value="max_diff_gross">Largest single change</option>
+        <option value="pct_revised">% Revised rows</option>
+        <option value="rows">Total rows</option>
+      </select>
+    </div>
+    <div>
+      <label>Min rows</label>
+      <input id="f-minrows" type="number" min="0" value="3"
+             class="form-control form-control-sm" style="width:80px">
+    </div>
+    <div>
+      <label>Search item code</label>
+      <input id="f-search" type="text" placeholder="e.g. UD125"
+             class="form-control form-control-sm" style="width:140px">
+    </div>
+    <div>
+      <label>Show top</label>
+      <select id="f-limit" class="form-select form-select-sm">
+        <option>50</option><option selected>100</option>
+        <option>250</option><option>500</option>
+      </select>
+    </div>
+    <button id="apply" class="btn btn-sm btn-primary">Apply</button>
+  </div>
+</div>
+
+<div class="section-card">
+  <h2>Ranking table</h2>
+  <div class="simple-words">
+    <span class="label">In plain words</span>
+    <b>Rows / Inconsistent / Revised</b> are raw counts.
+    <b>% IF / % CI / % LR</b> are the share of the item's rows flagged by
+    each detector. <b>Avg |Rev|</b> is the typical size of forecast
+    revisions for the item. <b>Suspicion</b> on the right combines
+    everything into one 0-100% score.
+  </div>
+  <div class="table-responsive">
+    <table class="table table-sm dt-rankings" id="tbl">
+      <thead><tr>
+        <th>Item</th>
+        <th class="text-end">Rows</th>
+        <th class="text-end">Inconsistent</th>
+        <th class="text-end">Revised</th>
+        <th class="text-end">% IF</th>
+        <th class="text-end">% CI</th>
+        <th class="text-end">% LR</th>
+        <th class="text-end">% Revised</th>
+        <th class="text-end">Avg |Rev|</th>
+        <th class="text-end">Max |Diff|</th>
+        <th class="text-end">Suspicion</th>
+        <th></th>
+      </tr></thead>
+      <tbody></tbody>
+    </table>
+  </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+let CACHED = [];
+async function load() {
+  const minrows = document.getElementById('f-minrows').value;
+  const limit = document.getElementById('f-limit').value;
+  const url = `/api/rankings_table?limit=${limit}&minrows=${minrows}`;
+  CACHED = await CRP.fetchJSON(url);
+  render();
+}
+function render() {
+  const sort = document.getElementById('f-sort').value;
+  const search = document.getElementById('f-search').value.trim().toUpperCase();
+  let rows = CACHED.slice();
+  if (search) rows = rows.filter(r => r.ItemCode.toUpperCase().includes(search));
+  rows.sort((a, b) => (b[sort] ?? 0) - (a[sort] ?? 0));
+  const tb = document.querySelector('#tbl tbody');
+  tb.innerHTML = rows.map(r => `
+    <tr>
+      <td><a class="dt-link" href="/item/${r.ItemCode}">${r.ItemCode}</a></td>
+      <td class="text-end">${r.rows}</td>
+      <td class="text-end">${r.n_inconsistent}</td>
+      <td class="text-end">${r.n_revised}</td>
+      <td class="text-end">${(r.pct_anomaly_if*100).toFixed(1)}%</td>
+      <td class="text-end">${(r.pct_anomaly_ci*100).toFixed(1)}%</td>
+      <td class="text-end">${(r.pct_anomaly_lr*100).toFixed(1)}%</td>
+      <td class="text-end">${(r.pct_revised*100).toFixed(1)}%</td>
+      <td class="text-end">${CRP.fmt(r.avg_abs_revision, 0)}</td>
+      <td class="text-end">${CRP.fmt(r.max_diff_gross, 0)}</td>
+      <td class="text-end score-bg" style="--p:${(r.suspicion_score*100).toFixed(0)}%">${(r.suspicion_score*100).toFixed(1)}%</td>
+      <td><a class="btn btn-sm btn-outline-primary" href="/item/${r.ItemCode}">Inspect</a></td>
+    </tr>`).join('');
+}
+document.getElementById('apply').addEventListener('click', load);
+document.getElementById('f-sort').addEventListener('change', render);
+document.getElementById('f-search').addEventListener('input', render);
+load();
+</script>
+{% endblock %}

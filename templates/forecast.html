@@ -1,0 +1,153 @@
+﻿{% extends "base.html" %}
+{% set active = 'forecast' %}
+
+{% block content %}
+<h1 class="h3 mb-3">Forecast vs Actual</h1>
+<p class="text-secondary mb-3">
+  Compare what really happened (the actual sales) with what the system
+  predicted (the forecast) - for any item you choose. The same item is
+  shown in two ways: against the actual line, and across two consecutive
+  snapshots, so you can see exactly how the forecast moved.
+</p>
+
+<div class="guide-card">
+  <h2>How to read this page - order of inspection</h2>
+  <div class="guide-step">
+    <span class="step-badge s1">1</span>
+    <div class="guide-text">
+      <b>Pick an item from the dropdown</b> (top suspicious items are
+      pre-loaded so you can start immediately).
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s2">2</span>
+    <div class="guide-text">
+      <b>Look at the left chart first.</b> If the orange "actual" line
+      stays inside the blue "forecast" band, the forecast is healthy. If
+      it escapes the band, you need to understand why.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s3">3</span>
+    <div class="guide-text">
+      <b>Then look at the right chart.</b> Two coloured lines = two
+      snapshots. Where the lines disagree, the forecast was revised
+      between the two runs.
+    </div>
+  </div>
+  <div class="guide-step">
+    <span class="step-badge s4">4</span>
+    <div class="guide-text">
+      <b>Apply the checklist below</b> to decide whether to validate or
+      push the forecast back.
+    </div>
+  </div>
+</div>
+
+<div class="section-card">
+  <h2>Choose an item</h2>
+  <div class="controls-row">
+    <div>
+      <label>Item code</label>
+      <select id="f-item" class="form-select form-select-sm" style="min-width: 180px">
+        {% for it in items %}<option>{{ it }}</option>{% endfor %}
+      </select>
+    </div>
+    <div>
+      <label>Sub-area (optional)</label>
+      <select id="f-subarea" class="form-select form-select-sm" style="min-width: 140px">
+        <option value="">All sub-areas</option>
+        {% for s in subareas %}<option>{{ s }}</option>{% endfor %}
+      </select>
+    </div>
+    <button class="btn btn-sm btn-primary" id="reload">Reload charts</button>
+  </div>
+</div>
+
+<div class="row g-3">
+  <div class="col-12 col-xl-7"><div class="section-card">
+    <h2><span class="step-badge s2">2</span>Actual sales vs forecast</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      <b>Orange line</b> = real sales. <b>Blue line</b> = forecast.
+      <b>Light-blue band</b> around the forecast = "normal" range
+      (plus or minus 1 standard deviation of past revisions).
+      <br><b>Read it like this:</b> if the orange line stays inside the
+      band, your forecast is in good shape. If it pokes out, that month's
+      forecast probably needs a manual review.
+    </div>
+    <div id="plot-fc" class="plot-box lg"></div>
+  </div></div>
+  <div class="col-12 col-xl-5"><div class="section-card">
+    <h2><span class="step-badge s3">3</span>Snapshot 1 vs Snapshot 2 - overlap</h2>
+    <div class="simple-words">
+      <span class="label">In plain words</span>
+      Two coloured lines = two consecutive forecast runs for the same
+      item. If the lines sit on top of each other, the forecast didn't
+      change much between runs (good). If they diverge, the planning
+      system materially changed its mind - that's worth understanding.
+    </div>
+    <div id="plot-snap" class="plot-box lg"></div>
+  </div></div>
+</div>
+
+<div class="section-card" style="border-left: 4px solid var(--primary);">
+  <h2><span class="step-badge s4">4</span>Demand-planner checklist</h2>
+  <div class="simple-words">
+    <span class="label">Decision rules</span>
+    <ol class="mb-0 mt-1">
+      <li><b>Actual outside the band</b> -> upstream sell-in correction or sudden demand shift. Confirm with the sales team.</li>
+      <li><b>Actual diverges then snaps back</b> -> likely a one-off promotion or event. Probably safe.</li>
+      <li><b>Snapshot 2 is higher than Snapshot 1</b> -> forecast was revised up. Confirm new actuals support the increase.</li>
+      <li><b>Snapshot 2 is lower than Snapshot 1</b> -> forecast was revised down. Verify with sell-out and current inventory.</li>
+    </ol>
+  </div>
+</div>
+
+{% endblock %}
+
+{% block scripts %}
+<script>
+async function reload() {
+  const item = document.getElementById('f-item').value;
+  const sub = document.getElementById('f-subarea').value;
+  const params = new URLSearchParams({item});
+  if (sub) params.set('subarea', sub);
+
+  const d = await CRP.fetchJSON('/api/forecast_actual?' + params);
+  if (d.error) {
+    document.getElementById('plot-fc').innerHTML =
+      '<div class="alert alert-warning m-3">No data for this filter.</div>';
+    document.getElementById('plot-snap').innerHTML = '';
+    return;
+  }
+  CRP.plot('plot-fc', [
+    {x: d.fc_x, y: d.fc_upper, mode: 'lines', line: {width: 0}, showlegend: false, hoverinfo: 'skip'},
+    {x: d.fc_x, y: d.fc_lower, mode: 'lines', fill: 'tonexty',
+     fillcolor: 'rgba(44,82,130,0.12)', line: {width: 0}, name: 'Normal band'},
+    {x: d.fc_x, y: d.fc_y, mode: 'lines+markers', name: 'Forecast',
+     line: {color: '#2c5282', width: 2.5}},
+    {x: d.actual_x, y: d.actual_y, mode: 'lines+markers', name: 'Actual',
+     line: {color: '#c2410c', width: 2.5}},
+  ], {xaxis: {title: 'Date'}, yaxis: {title: 'Quantity'}});
+
+  const sn = await CRP.fetchJSON('/api/snapshot_overlap?' + params);
+  if (sn.error) {
+    document.getElementById('plot-snap').innerHTML =
+      `<div class="alert alert-warning m-3">${sn.error}.</div>`;
+    return;
+  }
+  const palette = ['#2c5282', '#d97706'];
+  const traces = sn.series.map((s, i) => ({
+    x: s.x, y: s.y, mode: 'lines+markers',
+    name: 'Snapshot ' + s.snapshot,
+    line: {color: palette[i % palette.length], width: 2.5}
+  }));
+  CRP.plot('plot-snap', traces,
+           {xaxis: {title: 'Forecast Month'}, yaxis: {title: 'Forecast quantity'}});
+}
+
+document.getElementById('reload').addEventListener('click', reload);
+reload();
+</script>
+{% endblock %}
